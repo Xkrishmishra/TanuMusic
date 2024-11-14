@@ -1,80 +1,69 @@
 import os
-import future
-import asyncio
 import requests
-import wget
-import time
-import yt_dlp
-from urllib.parse import urlparse
-from youtube_search import YoutubeSearch
-from yt_dlp import YoutubeDL
-
-from TanuMusic import app
-from pyrogram import filters
 from pyrogram import Client, filters
-from pyrogram.types import Message
-from youtubesearchpython import VideosSearch
-from youtubesearchpython import SearchVideos
+from TanuMusic import app
 
+# Function to search for the song on archive.org
+def search_archive(song_name):
+    query = song_name.replace(" ", "+")
+    url = f"https://archive.org/advancedsearch.php?q={query}+AND+mediatype%3Aaudio&fl[]=identifier&fl[]=title&rows=1&output=json"
+    response = requests.get(url)
+    data = response.json()
 
+    if data['response']['docs']:
+        identifier = data['response']['docs'][0]['identifier']
+        title = data['response']['docs'][0]['title']
+        return identifier, title
+    else:
+        return None, None
 
+# Function to download the audio file
+def download_audio_from_archive(identifier, title):
+    meta_url = f"https://archive.org/metadata/{identifier}"
+    meta_response = requests.get(meta_url)
+    meta_data = meta_response.json()
 
-# ------------------------------------------------------------------------------- #
+    for file in meta_data.get("files", []):
+        if file.get("format") == "VBR MP3":  # Check for MP3 format
+            audio_url = f"https://archive.org/download/{identifier}/{file['name']}"
+            response = requests.get(audio_url, stream=True)
+            filename = f"{title}.mp3"
 
+            if response.status_code == 200:
+                with open(filename, "wb") as f:
+                    for chunk in response.iter_content(chunk_size=1024):
+                        f.write(chunk)
+                return filename
+            else:
+                return None
+    return None
+
+# Handler for /song command
 @app.on_message(filters.command("song"))
-def download_song(_, message):
-    query = " ".join(message.command[1:])  
-    print(query)
-    m = message.reply("💌")
-    ydl_ops = {"format": "bestaudio[ext=m4a]"}
-    try:
-        results = YoutubeSearch(query, max_results=1).to_dict()
-        link = f"https://youtube.com{results[0]['url_suffix']}"
-        title = results[0]["title"][:40]
-        thumbnail = results[0]["thumbnails"][0]
-        thumb_name = f"{title}.jpg"
-        thumb = requests.get(thumbnail, allow_redirects=True)
-        open(thumb_name, "wb").write(thumb.content)
-        duration = results[0]["duration"]
+async def handle_song(client, message):
+    # Get the song name after the /song command
+    song_name = message.text.split(" ", 1)[1] if len(message.text.split(" ", 1)) > 1 else None
 
-        # Add these lines to define views and channel_name
-        views = results[0]["views"]
-        channel_name = results[0]["channel"]
-
-    except Exception as e:
-        m.edit("⚠️ ɴᴏ ʀᴇsᴜʟᴛs ᴡᴇʀᴇ ғᴏᴜɴᴅ. ᴍᴀᴋᴇ sᴜʀᴇ ʏᴏᴜ ᴛʏᴘᴇᴅ ᴛʜᴇ ᴄᴏʀʀᴇᴄᴛ sᴏɴɢ ɴᴀᴍᴇ.")
-        print(str(e))
+    if not song_name:
+        await message.reply("Please provide a song name after the /song command. Example: /song Beethoven Symphony 5")
         return
-    m.edit("📥 ᴅᴏᴡɴʟᴏᴀᴅɪɴɢ...")
-    try:
-        with yt_dlp.YoutubeDL(ydl_ops) as ydl:
-            info_dict = ydl.extract_info(link, download=False)
-            audio_file = ydl.prepare_filename(info_dict)
-            ydl.process_info(info_dict)
-        secmul, dur, dur_arr = 1, 0, duration.split(":")
-        for i in range(len(dur_arr) - 1, -1, -1):
-            dur += int(float(dur_arr[i])) * secmul
-            secmul *= 60
-        m.edit("📤 ᴜᴘʟᴏᴀᴅɪɴɢ...")
 
-        message.reply_audio(
-            audio_file,
-            thumb=thumb_name,
-            title=title,
-            caption=f"❖ {title}\n\n● ʀᴇǫᴜᴇsᴛᴇᴅ ʙʏ ➥ {message.from_user.mention}\n● ᴠɪᴇᴡs ➥ {views}\n● ᴄʜᴀɴɴᴇʟ ➥ {channel_name}\n\n❖ ᴘᴏᴡᴇʀᴇᴅ ʙʏ ➥ ๛ɴ ʏ ᴋ ᴀ ᴀ ࿐",
-            duration=dur
-        )
-        m.delete()
-    except Exception as e:
-        m.edit(" - An error !!")
-        print(e)
+    identifier, title = search_archive(song_name)
 
-    try:
-        os.remove(audio_file)
-        os.remove(thumb_name)
-    except Exception as e:
-        print(e)
-        
-        
+    if identifier:
+        filename = download_audio_from_archive(identifier, title)
+        if filename:
+             # Placeholder for channel name
 
-# ------------------------------------------------------------------------------- #
+            # Custom caption
+            caption = f"""❖ {title}\n\n● ʀᴇǫᴜᴇsᴛᴇᴅ ʙʏ ➥ {message.from_user.mention}\n❖ ᴘᴏᴡᴇʀᴇᴅ ʙʏ ➥ ˹ ᴛᴀɴᴜ ꭙ ᴍᴜsɪᴄ™"""
+                
+            # Send the audio file with custom caption
+            with open(filename, "rb") as audio_file:
+                await message.reply_audio(audio_file, caption=caption)
+            
+            os.remove(filename)  # Remove the file after sending it
+        else:
+            await message.reply(f"Sorry, I couldn't find a downloadable MP3 file for '{title}'.")
+    else:
+        await message.reply(f"Sorry, I couldn't find anything for '{song_name}'.")
